@@ -2,7 +2,14 @@ const mongoose = require('mongoose');
 
 async function connectDB() {
   try {
-    await mongoose.connect('mongodb://127.0.0.1:27017/Library');
+    const uri = process.env.MONGO_URI;
+
+    if (!uri) {
+      throw new Error('MONGO_URI is not defined');
+    }
+
+    await mongoose.connect(uri);
+
     console.log('Connect DB Success');
   } catch (error) {
     console.log('Connect DB Fail');
