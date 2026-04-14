@@ -32,8 +32,15 @@ app.use(cookieParser());
 
 app.use('/share', express.static(path.join(__dirname, 'share')));
 
-// routes + db
+// db
 connectDB();
+
+// root route
+app.get('/', (req, res) => {
+  res.send('Backend is running');
+});
+
+// other routes
 router(app);
 
 // create http server for socket.io
@@ -47,10 +54,8 @@ const io = new Server(httpServer, {
   },
 });
 
-// make io accessible
 initSocket(io);
 
-// sockets
 io.on('connection', (socket) => {
   const userIdRaw = socket.handshake.query.userId;
   const userId = userIdRaw ? userIdRaw.toString() : null;
@@ -74,11 +79,6 @@ io.on('connection', (socket) => {
   });
 });
 
-app.get('/', (req, res) => {
-  res.send('Backend is running');
-});
-
-// listen on httpServer
 const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
   console.log(`server running at port ${PORT}`);
