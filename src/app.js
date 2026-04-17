@@ -14,17 +14,37 @@ const { initSocket, userSocketMap } = require('./socket');
 
 const app = express();
 
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://front-end-library-project.onrender.com',
+];
+
+if (
+  process.env.CLIENT_URL &&
+  !allowedOrigins.includes(process.env.CLIENT_URL)
+) {
+  allowedOrigins.push(process.env.CLIENT_URL);
+}
+
+const corsOptions = {
+  origin(origin, callback) {
+    // allow requests with no origin (server-to-server, curl, postman)
+    if (!origin) return callback(null, true);
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`Not allowed by CORS: ${origin}`));
+  },
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'token'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+};
 
 // middleware
-app.use(
-  cors({
-    origin: [CLIENT_URL, 'https://front-end-library-project.onrender.com'],
-    credentials: true,
-    allowedHeaders: ['Content-Type', 'token'],
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  }),
-);
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -49,8 +69,17 @@ const httpServer = http.createServer(app);
 // socket.io server
 const io = new Server(httpServer, {
   cors: {
-    origin: CLIENT_URL,
+    origin(origin, callback) {
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`Socket.IO CORS blocked: ${origin}`));
+    },
     credentials: true,
+    methods: ['GET', 'POST'],
   },
 });
 
@@ -83,4 +112,5 @@ const PORT = process.env.PORT || 5000;
 httpServer.listen(PORT, () => {
   console.log(`server running at port ${PORT}`);
   console.log('JWT_SECRET loaded:', !!process.env.JWT_SECRET);
+  console.log('Allowed origins:', allowedOrigins);
 });
