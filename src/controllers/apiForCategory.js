@@ -1,171 +1,69 @@
-const Message = require('../models/message');
-const User = require('../models/user');
-const { getIO, userSocketMap } = require('../socket');
-
-// get all users for sidebar + unseen counts
-const getUsersForSideBar = async (req, res) => {
-  try {
-    const myId = req.user._id;
-
-    const users = await User.find({ _id: { $ne: myId } }).select('-password');
-
-    const unseenMessage = {};
-
-    await Promise.all(
-      users.map(async (user) => {
-        const count = await Message.countDocuments({
-          senderId: user._id,
-          receiverId: myId,
-          seen: false,
-        });
-
-        if (count > 0) {
-          unseenMessage[user._id.toString()] = count;
-        }
-      }),
-    );
-
-    return res.status(200).json({
-      success: true,
-      users,
-      unseenMessage,
-    });
-  } catch (error) {
-    console.error('getUsersForSideBar error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to load users',
-    });
-  }
-};
-
-// get shared conversation between me and selected user
-const getMessages = async (req, res) => {
-  try {
-    const myId = req.user._id;
-    const selectedUserId = req.params.id;
-
-    const messages = await Message.find({
-      $or: [
-        { senderId: myId, receiverId: selectedUserId },
-        { senderId: selectedUserId, receiverId: myId },
-      ],
-    }).sort({ createdAt: 1 });
-
-    // mark messages from selected user to me as seen
-    await Message.updateMany(
-      {
-        senderId: selectedUserId,
-        receiverId: myId,
-        seen: false,
-      },
-      {
-        $set: { seen: true },
-      },
-    );
-
-    return res.status(200).json({
-      success: true,
-      messages,
-    });
-  } catch (error) {
-    console.error('getMessages error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to load messages',
-    });
-  }
-};
-
-// send message to another user
-const sendMessage = async (req, res) => {
-  try {
-    const senderId = req.user._id;
-    const receiverId = req.params.id;
-    const text = req.body.text?.trim() || '';
-    const image = req.body.image?.trim() || '';
-
-    if (!receiverId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Receiver id is required',
-      });
-    }
-
-    if (!text && !image) {
-      return res.status(400).json({
-        success: false,
-        message: 'Message must contain text or image',
-      });
-    }
-
-    const newMessage = await Message.create({
-      senderId,
-      receiverId,
-      text,
-      image,
-      seen: false,
-    });
-
-    // send realtime message to receiver if online
-    const receiverSocketId = userSocketMap[receiverId.toString()];
-    if (receiverSocketId) {
-      getIO().to(receiverSocketId).emit('newMessage', newMessage);
-    }
-
-    // optional: also emit back to sender's other tabs/devices
-    const senderSocketId = userSocketMap[senderId.toString()];
-    if (senderSocketId) {
-      getIO().to(senderSocketId).emit('messageSent', newMessage);
-    }
-
-    return res.status(201).json({
-      success: true,
-      newMessage,
-    });
-  } catch (error) {
-    console.error('sendMessage error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to send message',
-    });
-  }
-};
-
-// mark one message as seen
-const markMessageAsSeen = async (req, res) => {
-  try {
-    const messageId = req.params.id;
-
-    const updatedMessage = await Message.findByIdAndUpdate(
-      messageId,
-      { $set: { seen: true } },
-      { new: true },
-    );
-
-    if (!updatedMessage) {
-      return res.status(404).json({
-        success: false,
-        message: 'Message not found',
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: updatedMessage,
-    });
-  } catch (error) {
-    console.error('markMessageAsSeen error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to mark message as seen',
-    });
-  }
-};
+require('dotenv').config();
 
 module.exports = {
-  getUsersForSideBar,
-  getMessages,
-  sendMessage,
-  markMessageAsSeen,
+  searchCategoryBookFromGoogle: async (req, res) => {
+    try {
+      const { q, limit = 20 } = req.query;
+
+      if (!q) {
+        return res.status(400).json({ message: 'Search query is required' });
+      }
+
+      const maxResults = Math.min(Number(limit) || 20, 40);
+      const apiKey = process.env.GOOGLE_BOOKS_API_KEY;
+
+      const params = new URLSearchParams({
+        q: `subject:${q}`,
+        maxResults: String(maxResults),
+        key: apiKey, //  Include your key here
+      });
+
+      const url = `https://www.googleapis.com/books/v1/volumes?${params.toString()}`;
+
+      const response = await fetch(url);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return res.status(response.status).json({
+          message: 'Google Books error',
+          details: errorText,
+        });
+      }
+
+      const data = await response.json();
+
+      const books = (data.items || []).map((item, index) => {
+        const info = item.volumeInfo || {};
+        const img =
+          info.imageLinks?.thumbnail || info.imageLinks?.smallThumbnail || null;
+
+        const hdCover = img
+          ? img.replace('http://', 'https://').replace(/zoom=\d+/, 'zoom=3')
+          : null;
+
+        return {
+          key: item.id || String(index),
+          title: info.title || 'Untitled',
+          author: (info.authors && info.authors[0]) || 'Unknown',
+          publishedDate: info.publishedDate || null,
+          categories: info.categories || [],
+          isbn:
+            info.industryIdentifiers?.find((x) => x.type === 'ISBN_13')
+              ?.identifier ||
+            info.industryIdentifiers?.find((x) => x.type === 'ISBN_10')
+              ?.identifier ||
+            null,
+          coverUrl: hdCover,
+        };
+      });
+
+      return res.status(200).json({
+        total: data.totalItems || 0,
+        results: books,
+      });
+    } catch (err) {
+      console.error('Server error:', err);
+      return res.status(500).json({ message: 'Server error' });
+    }
+  },
 };

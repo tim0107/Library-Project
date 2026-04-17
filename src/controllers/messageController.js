@@ -1,50 +1,49 @@
 const Message = require('../models/message');
 const User = require('../models/user');
-
-// app.js must export io + userSocketMap using module.exports
 const { getIO, userSocketMap } = require('../socket');
 
+// get all users for sidebar + unseen counts
 const getUsersForSideBar = async (req, res) => {
   try {
-    const userId = req.user._id;
+    const myId = req.user._id;
 
-    const users = await User.find({ _id: { $ne: userId } }).select('-password');
+    const users = await User.find({ _id: { $ne: myId } }).select('-password');
 
     const unseenMessage = {};
 
     await Promise.all(
-      users.map(async (u) => {
+      users.map(async (user) => {
         const count = await Message.countDocuments({
-          senderId: u._id,
-          receiverId: userId,
+          senderId: user._id,
+          receiverId: myId,
           seen: false,
         });
 
-        if (count > 0) unseenMessage[u._id.toString()] = count;
+        if (count > 0) {
+          unseenMessage[user._id.toString()] = count;
+        }
       }),
     );
 
-    return res.json({ success: true, users, unseenMessage });
+    return res.status(200).json({
+      success: true,
+      users,
+      unseenMessage,
+    });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    console.error('getUsersForSideBar error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to load users',
+    });
   }
 };
 
-// mark message as seen
-const markMessageAsSeen = async (req, res) => {
-  try {
-    const { id } = req.params;
-    await Message.findByIdAndUpdate(id, { seen: true });
-    return res.status(200).json({ success: true });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
+// get shared conversation between me and selected user
 const getMessages = async (req, res) => {
   try {
-    const { id: selectedUserId } = req.params;
     const myId = req.user._id;
+    const selectedUserId = req.params.id;
 
     const messages = await Message.find({
       $or: [
@@ -53,63 +52,120 @@ const getMessages = async (req, res) => {
       ],
     }).sort({ createdAt: 1 });
 
-    // mark messages from selected user -> me as seen
+    // mark messages from selected user to me as seen
     await Message.updateMany(
-      { senderId: selectedUserId, receiverId: myId, seen: false },
-      { seen: true },
+      {
+        senderId: selectedUserId,
+        receiverId: myId,
+        seen: false,
+      },
+      {
+        $set: { seen: true },
+      },
     );
 
-    return res.json({ success: true, messages });
+    return res.status(200).json({
+      success: true,
+      messages,
+    });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    console.error('getMessages error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to load messages',
+    });
   }
 };
 
+// send message to another user
 const sendMessage = async (req, res) => {
   try {
-    const { text } = req.body;
+    const senderId = req.user._id;
     const receiverId = req.params.id;
-    const senderId = req.user?._id;
-
-    if (!senderId) {
-      return res.status(401).json({ success: false, message: 'Unauthorized' });
-    }
+    const text = req.body.text?.trim() || '';
+    const image = req.body.image?.trim() || '';
 
     if (!receiverId) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'Receiver id is required' });
+      return res.status(400).json({
+        success: false,
+        message: 'Receiver id is required',
+      });
     }
 
-    if (!text || !text.trim()) {
-      return res
-        .status(400)
-        .json({ success: false, message: 'Message text is required' });
+    if (!text && !image) {
+      return res.status(400).json({
+        success: false,
+        message: 'Message must contain text or image',
+      });
     }
 
     const newMessage = await Message.create({
       senderId,
       receiverId,
-      text: text.trim(),
+      text,
+      image,
       seen: false,
     });
 
-    // emit new message to receiver socket
+    // send realtime message to receiver if online
     const receiverSocketId = userSocketMap[receiverId.toString()];
     if (receiverSocketId) {
-      getIO().to(receiverSocketId).emit('newMessage', newMessage); // ✅ event name: lower-case recommended
+      getIO().to(receiverSocketId).emit('newMessage', newMessage);
     }
 
-    return res.status(201).json({ success: true, newMessage });
+    // optional: also emit back to sender's other tabs/devices
+    const senderSocketId = userSocketMap[senderId.toString()];
+    if (senderSocketId) {
+      getIO().to(senderSocketId).emit('messageSent', newMessage);
+    }
+
+    return res.status(201).json({
+      success: true,
+      newMessage,
+    });
   } catch (error) {
-    console.log('sendMessage error:', error.message);
-    return res.status(500).json({ success: false, message: error.message });
+    console.error('sendMessage error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to send message',
+    });
+  }
+};
+
+// mark one message as seen
+const markMessageAsSeen = async (req, res) => {
+  try {
+    const messageId = req.params.id;
+
+    const updatedMessage = await Message.findByIdAndUpdate(
+      messageId,
+      { $set: { seen: true } },
+      { new: true },
+    );
+
+    if (!updatedMessage) {
+      return res.status(404).json({
+        success: false,
+        message: 'Message not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: updatedMessage,
+    });
+  } catch (error) {
+    console.error('markMessageAsSeen error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to mark message as seen',
+    });
   }
 };
 
 module.exports = {
   getUsersForSideBar,
-  markMessageAsSeen,
   getMessages,
   sendMessage,
+  markMessageAsSeen,
 };
