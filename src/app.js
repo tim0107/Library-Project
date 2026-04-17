@@ -19,7 +19,7 @@ const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
 // middleware
 app.use(
   cors({
-    origin: CLIENT_URL,
+    origin: [CLIENT_URL, 'https://front-end-library-project.onrender.com'],
     credentials: true,
     allowedHeaders: ['Content-Type', 'token'],
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
