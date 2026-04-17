@@ -15,9 +15,11 @@ const messageSchema = new mongoose.Schema(
     text: {
       type: String,
       trim: true,
+      default: '',
     },
     image: {
       type: String,
+      default: '',
     },
     seen: {
       type: Boolean,
@@ -26,5 +28,17 @@ const messageSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
+
+// must have either text or image
+messageSchema.pre('validate', function (next) {
+  const hasText = this.text && this.text.trim().length > 0;
+  const hasImage = this.image && this.image.trim().length > 0;
+
+  if (!hasText && !hasImage) {
+    return next(new Error('Message must contain text or image'));
+  }
+
+  next();
+});
 
 module.exports = mongoose.model('Message', messageSchema);
